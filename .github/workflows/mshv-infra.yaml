@@ -19,21 +19,23 @@ on:
         required: true
         type: string
     secrets:
-      MSHV_CLIENT_ID:
+      MSHV_MI_CLIENT_ID:
         required: true
-      MSHV_STORAGE_ACCOUNT_PATH_BUILD:
+      MSHV_STORAGE_ACCOUNT_PATH_W2:
         required: true  
-      MSHV_STORAGE_ACCOUNT_PATH_LIVEMIGRATION:
+      MSHV_STORAGE_ACCOUNT_PATH_W3:
         required: true
-      MSHV_STORAGE_ACCOUNT_PATH_INTEGRATION:
-        required: true
-      MSHV_STORAGE_ACCOUNT_PATH_PERFMETRICS:
+      MSHV_STORAGE_ACCOUNT_PATH_WE:
         required: true
       MSHV_USERNAME:
         required: true
       MSHV_PASSWORD:
         required: true
       MSHV_X86_SOURCE_PATH:
+        required: true
+      MSHV_RUNNER_RG:
+        required: true
+      MSHV_RUNNER:
         required: true
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -50,15 +52,15 @@ jobs:
       - name: Install & login to AZ CLI
         run: |
           curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
-          az login --identity --username ${{ secrets.MSHV_CLIENT_ID }}
-      - name: Create Resource Group & Storage Account
+          az login --identity --client-id ${{ secrets.MSHV_MI_CLIENT_ID }}
+      - name: Create Resource Group
         run: |
           az group create --name ${{ inputs.RG }} --location ${{ inputs.Location }}
           if [ $? -ne 0 ]; then
             echo "Resource group creation failed"
-            exit 
+            exit
           fi
-            echo "Resource group created"
+          echo "Resource group created"
           az storage account create --name ${{ inputs.STORAGE_ACCOUNT }} --resource-group ${{ inputs.RG }} --location ${{ inputs.Location }} --sku Standard_LRS --allow-shared-key-access false
           if [ $? -ne 0 ]; then
             echo "Storage Account creation failed"
@@ -67,46 +69,40 @@ jobs:
             echo "Storage Account created"
       - name: Copy/Upload VHD to Azure Storage Account
         env: 
-          SOURCE_PATH_X86: ${{ secrets.MSHV_X86_SOURCE_PATH}}
+          SOURCE_PATH_X86: ${{ secrets.MSHV_X86_SOURCE_PATH }}
           STORAGE_ACCOUNT_PATH: ""
         run: |
           set -x
 
           # Login to Azure
-          az login --identity --username ${{ secrets.MSHV_CLIENT_ID }}
+          az login --identity --client-id ${{ secrets.MSHV_MI_CLIENT_ID }}
 
           # Install AzCopy
           echo "Installing AzCopy"
-          wget https://aka.ms/downloadazcopy-v10-linux
-          tar -xvzf downloadazcopy-v10-linux
-          export PATH=$PATH:$PWD/azcopy_linux_amd64_10.25.1
+          wget -O azcopy.tar.gz https://aka.ms/downloadazcopy-v10-linux
+          tar -xvf azcopy.tar.gz
+          sudo mkdir -p /usr/local/bin
+          sudo mv azcopy_linux_amd64_10.28.1/azcopy /usr/local/bin/
+          sudo chmod +x /usr/local/bin/azcopy
 
           # AzCopy Login
-          azcopy login --identity
+          azcopy login --identity --identity-client-id ${{ secrets.MSHV_MI_CLIENT_ID }}
           if [ $? -ne 0 ]; then
             echo "AzCopy Login Failed"
             exit 
           fi
-            # AzCopy Login Succeeded
-
-          if [ ${{ inputs.RG }} == "MSHVBuild" ]; then
-            STORAGE_ACCOUNT_PATH=${{ secrets.MSHV_STORAGE_ACCOUNT_PATH_BUILD }}
-          elif [ ${{ inputs.RG }} == "MSHVLiveMigration" ]; then
-            STORAGE_ACCOUNT_PATH=${{ secrets.MSHV_STORAGE_ACCOUNT_PATH_LIVEMIGRATION }}
-          elif [ ${{ inputs.RG }} == "MSHVIntegration" ]; then
-            STORAGE_ACCOUNT_PATH=${{ secrets.MSHV_STORAGE_ACCOUNT_PATH_INTEGRATION }}
-          elif [ ${{ inputs.RG }} == "MSHVPerfMetrics" ]; then
-            STORAGE_ACCOUNT_PATH=${{ secrets.MSHV_STORAGE_ACCOUNT_PATH_PERFMETRICS }}
-          fi
-            echo ${STORAGE_ACCOUNT_PATH}
+          echo "AzCopy Login Succeeded"
+            
+          STORAGE_ACCOUNT_PATH=${{ secrets.MSHV_STORAGE_ACCOUNT_PATH_W3 }}
 
           # Copy VHD to Azure Storage Account
-          azcopy copy "${SOURCE_PATH_X86}" "${STORAGE_ACCOUNT_PATH}"
+          echo "Copying VHD to Azure Storage Account"
+          azcopy copy "${SOURCE_PATH_X86}" "${STORAGE_ACCOUNT_PATH}/vhds/x86.vhd"
           if [ $? -ne 0 ]; then
             echo "AzCopy Failed: VHD upload failed"
             exit 
           fi
-            echo "AzCopy Succeeded: VHD upload complete"
+          echo "AzCopy Succeeded: VHD upload complete"
 
           # Create Blob URL for the VHD
           echo "Creating Blob URL"
@@ -115,7 +111,7 @@ jobs:
             echo "Blob URL creation failed"
             exit 
           fi
-            echo "Created Blob URL"
+          echo "Created Blob URL"
 
           # Create Image from the VHD
           echo "Creating Image"
@@ -134,28 +130,45 @@ jobs:
           az image wait --image-name vhd-image --resource-group ${{ inputs.RG }} --exists
           echo "Image is available"
           
-      - name: Create DOM0 VM 
+      - name: Create DOM0 VM
+        env:
+          RUNNER_RG: ${{ secrets.MSHV_RUNNER_RG }}
+          RUNNER: ${{ secrets.MSHV_RUNNER }}
         run: |
           set -x
-
+          echo "$RUNNER"
           # Extract subnet ID
-          SUBNET_ID = $(az network nic show --ids $(az vm show --name $(hostname) --resource-group ${{ inputs.RG }} --query "networkProfile.networkInterfaces[0].id" -o tsv) --query "ipConfigurations[0].subnet.id" -o tsv)
+          NIC_ID=$(az vm show --resource-group ${{ secrets.MSHV_RUNNER_RG }} --name ${{ secrets.MSHV_RUNNER }} --query "networkProfile.networkInterfaces[0].id" -o tsv)
+          SUBNET_ID=$(az network nic show --ids $NIC_ID --query "ipConfigurations[0].subnet.id" -o tsv)
 
-          if [ $? -ne 0 ]; then
-            echo "Failed to retrieve subnet ID"
+          if [[ -z "$SUBNET_ID" ]]; then
+            echo "Failed to get Subnet ID. Check if the VM exists and has a network interface."
             exit 1
           fi
-            echo "Successfully retrieved subnet ID"
+          echo "Successfully retrieved subnet ID"
 
           # Create VM
           echo "Creating VM"
-          vm_creation=$(az vm create --resource-group ${{ inputs.RG }} --name dom0_x86 --subnet $SUBNET_ID --size ${{ inputs.DOM0_SKU }} --location ${{ inputs.Location }} --image vhd-image --os-disk-size-gb 512 --public-ip-sku Standard --storage-sku Premium_LRS --public-ip-address "")
+          VM_CREATION=$(az vm create \
+            --resource-group ${{ inputs.RG }} \
+            --name dom0_x86 --subnet $SUBNET_ID \
+            --size ${{ inputs.DOM0_SKU }} \
+            --location ${{ inputs.Location }} \
+            --image vhd-image \
+            --os-disk-size-gb 512 \
+            --public-ip-sku Standard \
+            --storage-sku Premium_LRS \
+            --public-ip-address "" \
+            --admin-username  ${{ secrets.MSHV_USERNAME }} \
+            --admin-password ${{ secrets.MSHV_PASSWORD }} \
+            --security-type Standard \
+            --output json)
           if [ $? -ne 0 ]; then
             echo "VM Creation Failed"
             exit 1
           fi
-            echo "VM Creation Succeeded"
-          echo $vm_creation
+          echo "VM Creation Succeeded"
+          echo $VM_CREATION
 
           echo "Retrieving VM Private IP address"
           # Get Private IP Address
@@ -164,8 +177,7 @@ jobs:
             echo "Failed to retrieve private IP address"
             exit 1
           fi
-            echo "Successfully retrieved private IP address"
-            echo $PRIVATE_IP
+          echo "Successfully retrieved private IP address"
 
           # SSH into the VM via sshpass
           echo "Installing sshpass"
@@ -188,7 +200,7 @@ jobs:
             if [ $? -ne 0 ]; then
               echo "Clone failed for cloud-hypervisor repo"
             fi
-              echo "Clone succeeded for cloud-hypervisor repo"
+            echo "Clone succeeded for cloud-hypervisor repo"
 
             sudo chown -R ${{ secrets.MSHV_USERNAME }} cloud-hypervisor
             cd cloud-hypervisor
