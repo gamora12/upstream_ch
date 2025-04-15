@@ -1,14 +1,14 @@
-name: MSHV Build
+name: MSHV Performance Metrics Tests (x86-64)
 on: 
   workflow_dispatch:
 jobs:
   infrasetup:
-    uses: ./.github/workflows/mshv-infra.yaml
     name: MSHV Infra Setup
+    uses: ./.github/workflows/mshv-infra.yaml
     with:
-      RG: "MSHVBuild"
+      RG: "MSHVPerfMetrics"
       STORAGE_ACCOUNT: "mshvwestus3"
-      DOM0_SKU: "Standard_d16s_v5"
+      DOM0_SKU: "Standard_E8-2ds_v5"
     secrets:
       MSHV_MI_CLIENT_ID: ${{ secrets.MSHV_MI_CLIENT_ID }}
       MSHV_STORAGE_ACCOUNT_PATH_W2: ${{ secrets.MSHV_STORAGE_ACCOUNT_PATH_W2 }}
@@ -19,31 +19,22 @@ jobs:
       MSHV_X86_SOURCE_PATH: ${{ secrets.MSHV_X86_SOURCE_PATH }}
       MSHV_RUNNER_RG: ${{ secrets.MSHV_RUNNER_RG }}
       MSHV_RUNNER: ${{ secrets.MSHV_RUNNER }}
-  build:
-    name: Build
+  run_tests:
+    name: Performance Metrics Tests (x86-64)
     runs-on:
       - self-hosted
       - Linux
     needs: infrasetup
-    strategy:
-      fail-fast: false
-      matrix:
-        RUNNER: 
-         - 'test-runner'
-        BUILD_CMD: 
-         - 'cargo build'
-         - 'cargo build --features "mshv"'
-         - 'cargo build --features "mshv,sev_snp,igvm"'
-         - 'cargo build --package vhost_user_net'
-         - 'cargo build --package vhost_user_block'
     steps:
-      - name: AZ Login
-        run: az login --identity --client-id ${{ secrets.MSHV_MI_CLIENT_ID }}
-      - name: Build MSHV
+      - name: Az Login
+        run: |
+          az login --identity --client-id ${{ secrets.MSHV_MI_CLIENT_ID }}
+      - name: Run performance metrics tests
         run: |
           set -x
           echo "Retrieving VM Private IP address"
-          PRIVATE_IP=$(az vm show -g MSHVBuild -n dom0_x86 -d --query privateIps -o tsv)
+          # Get Private IP Address
+          PRIVATE_IP=$(az vm show -g MSHVPerfMetrics -n dom0_x86 -d --query privateIps -o tsv)
           if [ $? -ne 0 ]; then
            echo "Failed to retrieve private IP address"
            exit 1
@@ -54,17 +45,13 @@ jobs:
           sshpass -p "${{ secrets.MSHV_PASSWORD }}" ssh -o StrictHostKeyChecking=no "${{ secrets.MSHV_USERNAME }}"@$PRIVATE_IP << EOF
             set -x
             echo "Logged in"
-            sudo tdnf install git moby-engine moby-cli dosfstools mtools build-essential m4 bison flex libuuid-devel qemu-img -y
-            curl -sSf https://sh.rustup.rs | sh -s -- --default-toolchain stable --profile default -y
-            export PATH="\$HOME/.cargo/bin:$PATH"
+            sudo chown -R ${{secrets.MSHV_USERNAME}} cloud-hypervisor
             cd cloud-hypervisor
-            # Build Cloud-Hypervisor
-            echo "Building Cloud-Hypervisor"
-            ${{ matrix.BUILD_CMD }} --release
+            sudo ./scripts/dev_cli.sh tests --hypervisor mshv --metrics
           EOF
 
   cleanup:
-    needs: build
+    needs: run_tests
     if: always()
     runs-on:
     - self-hosted
@@ -72,5 +59,5 @@ jobs:
     steps:
       - name: Delete Resource Group
         run: |
-            az group delete --name MSHVBuild --yes --no-wait
-            echo "Resource group deleted"
+          az group delete --name MSHVPerfMetrics --yes --no-wait
+          echo "Resource group deleted"

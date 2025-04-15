@@ -1,12 +1,12 @@
-name: MSHV Build
+name: MSHV Integration Tests (x86-64)
 on: 
   workflow_dispatch:
 jobs:
   infrasetup:
-    uses: ./.github/workflows/mshv-infra.yaml
     name: MSHV Infra Setup
+    uses: ./.github/workflows/mshv-infra.yaml
     with:
-      RG: "MSHVBuild"
+      RG: "MSHVIntegration"
       STORAGE_ACCOUNT: "mshvwestus3"
       DOM0_SKU: "Standard_d16s_v5"
     secrets:
@@ -19,52 +19,59 @@ jobs:
       MSHV_X86_SOURCE_PATH: ${{ secrets.MSHV_X86_SOURCE_PATH }}
       MSHV_RUNNER_RG: ${{ secrets.MSHV_RUNNER_RG }}
       MSHV_RUNNER: ${{ secrets.MSHV_RUNNER }}
-  build:
-    name: Build
+  run_tests:
+    name: Integration Tests (x86-64)
     runs-on:
       - self-hosted
       - Linux
     needs: infrasetup
-    strategy:
-      fail-fast: false
-      matrix:
-        RUNNER: 
-         - 'test-runner'
-        BUILD_CMD: 
-         - 'cargo build'
-         - 'cargo build --features "mshv"'
-         - 'cargo build --features "mshv,sev_snp,igvm"'
-         - 'cargo build --package vhost_user_net'
-         - 'cargo build --package vhost_user_block'
     steps:
-      - name: AZ Login
+      - name: Az Login
         run: az login --identity --client-id ${{ secrets.MSHV_MI_CLIENT_ID }}
-      - name: Build MSHV
+      - name: Run integration tests
         run: |
           set -x
           echo "Retrieving VM Private IP address"
-          PRIVATE_IP=$(az vm show -g MSHVBuild -n dom0_x86 -d --query privateIps -o tsv)
+          PRIVATE_IP=$(az vm show -g MSHVIntegration -n dom0_x86 -d --query privateIps -o tsv)
           if [ $? -ne 0 ]; then
            echo "Failed to retrieve private IP address"
            exit 1
           fi
           echo "Successfully retrieved private IP address"
           echo $PRIVATE_IP
-
           sshpass -p "${{ secrets.MSHV_PASSWORD }}" ssh -o StrictHostKeyChecking=no "${{ secrets.MSHV_USERNAME }}"@$PRIVATE_IP << EOF
             set -x
             echo "Logged in"
-            sudo tdnf install git moby-engine moby-cli dosfstools mtools build-essential m4 bison flex libuuid-devel qemu-img -y
-            curl -sSf https://sh.rustup.rs | sh -s -- --default-toolchain stable --profile default -y
-            export PATH="\$HOME/.cargo/bin:$PATH"
+            sudo chown -R ${{secrets.MSHV_USERNAME}} cloud-hypervisor
             cd cloud-hypervisor
-            # Build Cloud-Hypervisor
-            echo "Building Cloud-Hypervisor"
-            ${{ matrix.BUILD_CMD }} --release
-          EOF
 
+            echo "Loading VDPA kernel modules..."
+            sudo modprobe vdpa
+            sudo modprobe vhost_vdpa
+            sudo modprobe vdpa_sim
+            sudo modprobe vdpa_sim_blk
+            sudo modprobe vdpa_sim_net
+
+            echo "Creating VDPA devices..."
+            sudo vdpa dev add name vdpa-blk0 mgmtdev vdpasim_blk
+            sudo vdpa dev add name vdpa-blk1 mgmtdev vdpasim_blk
+            sudo vdpa dev add name vdpa-blk2 mgmtdev vdpasim_net
+
+            echo "Setting permissions..."
+            for i in 0 1 2; do
+              dev="/dev/vhost-vdpa-$i"
+              if [ -e "$dev" ]; then
+                sudo chown $USER:$USER "$dev"
+                sudo chmod 660 "$dev"
+              else
+                echo "Warning: Device $dev not found"
+              fi
+            done
+
+            sudo ./scripts/dev_cli.sh tests --hypervisor mshv --integration
+          EOF
   cleanup:
-    needs: build
+    needs: run_tests
     if: always()
     runs-on:
     - self-hosted
@@ -72,5 +79,5 @@ jobs:
     steps:
       - name: Delete Resource Group
         run: |
-            az group delete --name MSHVBuild --yes --no-wait
-            echo "Resource group deleted"
+          az group delete --name MSHVIntegration --yes --no-wait
+          echo "Resource group deleted"
