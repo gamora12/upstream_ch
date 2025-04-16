@@ -55,5 +55,5 @@ jobs:
     steps:
       - name: Delete Resource Group
         run: |
-          az group delete --name MSHVPerfMetrics --yes --no-wait
+          az group delete --name MSHVPerfMetrics-${GITHUB_RUN_ID} --yes --no-wait
           echo "Resource group deleted"
