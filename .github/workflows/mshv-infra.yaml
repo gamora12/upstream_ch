@@ -162,7 +162,7 @@ jobs:
         run: |
           set -x
           # Extract subnet ID
-          LOCATION={{ steps.vmInfraPrerequisite.outputs.location }}
+          LOCATION=${{ steps.vmInfraPrerequisite.outputs.location }}
           query="[?contains(location, $LOCATION)].{Name:name, Location:location,ID:id,SUBNETS:subnets}"
           SUBNET_ID=$(az network vnet list --resource-group ${RUNNER_RG} --query $query | jq -r ".[0].SUBNETS[0].id")
 
