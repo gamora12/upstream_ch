@@ -163,7 +163,7 @@ jobs:
           set -x
           # Extract subnet ID
           LOCATION=${{ steps.vmInfraPrerequisite.outputs.location }}
-          SUBNET_ID=$(az network vnet list --resource-group ${RUNNER_RG} --query "[?contains(location, '${LOCATION}')].{SUBNETS:subnets}" | | jq -r ".[0].SUBNETS[0].id")
+          SUBNET_ID=$(az network vnet list --resource-group ${RUNNER_RG} --query "[?contains(location, '${LOCATION}')].{SUBNETS:subnets}" | jq -r ".[0].SUBNETS[0].id")
 
           if [[ -z "$SUBNET_ID" ]]; then
             echo "Failed to get Subnet ID."
