@@ -6,19 +6,15 @@ jobs:
     uses: ./.github/workflows/mshv-infra.yaml
     name: MSHV Infra Setup
     with:
-      RG: "MSHVBuild"
-      STORAGE_ACCOUNT: "mshvwestus3"
+      RG: "MSHVBuild-${GITHUB_RUN_ID}"
       DOM0_SKU: "Standard_d16s_v5"
     secrets:
       MSHV_MI_CLIENT_ID: ${{ secrets.MSHV_MI_CLIENT_ID }}
-      MSHV_STORAGE_ACCOUNT_PATH_W2: ${{ secrets.MSHV_STORAGE_ACCOUNT_PATH_W2 }}
-      MSHV_STORAGE_ACCOUNT_PATH_W3: ${{ secrets.MSHV_STORAGE_ACCOUNT_PATH_W3 }}
-      MSHV_STORAGE_ACCOUNT_PATH_WE: ${{ secrets.MSHV_STORAGE_ACCOUNT_PATH_WE }}
+      MSHV_STORAGE_ACCOUNT_PATHS: ${{ secrets.MSHV_STORAGE_ACCOUNT_PATHS }}
       MSHV_USERNAME: ${{ secrets.MSHV_USERNAME }}
       MSHV_PASSWORD: ${{ secrets.MSHV_PASSWORD }}
       MSHV_X86_SOURCE_PATH: ${{ secrets.MSHV_X86_SOURCE_PATH }}
       MSHV_RUNNER_RG: ${{ secrets.MSHV_RUNNER_RG }}
-      MSHV_RUNNER: ${{ secrets.MSHV_RUNNER }}
   build:
     name: Build
     runs-on:
