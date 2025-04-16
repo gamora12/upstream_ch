@@ -39,7 +39,7 @@ jobs:
         run: |
           set -x
           echo "Retrieving VM Private IP address"
-          PRIVATE_IP=$(az vm show -g MSHVBuild -n vm_x86_${GITHUB_RUN_ID} -d --query privateIps -o tsv)
+          PRIVATE_IP=$(az vm show -g MSHVBuild-${GITHUB_RUN_ID} -n vm_x86_${GITHUB_RUN_ID} -d --query privateIps -o tsv)
           if [ $? -ne 0 ]; then
            echo "Failed to retrieve private IP address"
            exit 1
