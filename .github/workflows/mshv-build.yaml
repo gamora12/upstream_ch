@@ -7,7 +7,7 @@ jobs:
     name: MSHV Infra Setup
     with:
       RG: "MSHVBuild-${{ github.run_id }}"
-      DOM0_SKU: "Standard_d16s_v5"
+      DOM0_SKU: "Standard_DC16ads_cc_v5"
     secrets:
       MSHV_MI_CLIENT_ID: ${{ secrets.MSHV_MI_CLIENT_ID }}
       MSHV_STORAGE_ACCOUNT_PATHS: ${{ secrets.MSHV_STORAGE_ACCOUNT_PATHS }}
