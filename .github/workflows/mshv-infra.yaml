@@ -43,7 +43,7 @@ jobs:
             curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
             az --version
           fi
-          az login --identity --client-id ${MI_CLIENT_ID}
+          az login --identity --client-id ${MI_CLIENT_ID} > /dev/null
 
       - name: Copy/Upload VHD to Azure Storage Account & Create RG
         env:
@@ -117,7 +117,7 @@ jobs:
           MSHV_DEST_STORAGE_PATH=$(jq -r --arg loc "$LOCATION" '.[$loc]' <<< ${STORAGE_ACCOUNT_PATHS})
 
           # AzCopy Login
-          azcopy login --identity --identity-client-id ${MI_CLIENT_ID}
+          azcopy login --identity --identity-client-id ${MI_CLIENT_ID} > /dev/null
           if [ $? -ne 0 ]; then
             echo "AzCopy Login Failed"
             exit 1
