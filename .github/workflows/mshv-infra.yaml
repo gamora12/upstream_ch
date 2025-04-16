@@ -6,10 +6,6 @@ on:
         description: 'Resource Group Name'
         required: true
         type: string
-      STORAGE_ACCOUNT:
-        description: 'Storage Account Name'
-        required: true
-        type: string
       DOM0_SKU: 
         description: 'Dom0 VM SKU'
         required: true
@@ -17,11 +13,7 @@ on:
     secrets:
       MSHV_MI_CLIENT_ID:
         required: true
-      MSHV_STORAGE_ACCOUNT_PATH_W2:
-        required: true  
-      MSHV_STORAGE_ACCOUNT_PATH_W3:
-        required: true
-      MSHV_STORAGE_ACCOUNT_PATH_WE:
+      MSHV_STORAGE_ACCOUNT_PATHS:
         required: true
       MSHV_USERNAME:
         required: true
@@ -47,12 +39,15 @@ jobs:
         env:
           MI_CLIENT_ID: ${{ secrets.MSHV_MI_CLIENT_ID }}
         run: |
-          curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+          if command -v az >/dev/null 2>&1; then
+            az --version
+          else
+            curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+            az --version
           az login --identity --client-id ${MI_CLIENT_ID}
 
       - name: Create Resource Group & Storage Account
         env:
-          LOCATION: westus3
           RG: ${{ inputs.RG }}
         run: |
           az group create --name ${RG} --location ${LOCATION}
@@ -64,41 +59,74 @@ jobs:
 
       - name: Copy/Upload VHD to Azure Storage Account
         env:
-          LOCATION: westus3
+          DOM0_SKU: ${{ inputs.DOM0_SKU }}
           MI_CLIENT_ID: ${{ secrets.MSHV_MI_CLIENT_ID }}
           RG: ${{ inputs.RG }}
           SOURCE_PATH_X86: ${{ secrets.MSHV_X86_SOURCE_PATH }}
-          STORAGE_ACCOUNT_PATH: ${{ secrets.MSHV_STORAGE_ACCOUNT_PATH_W3 }}
-          STORAGE_ACCOUNT: ${{ inputs.STORAGE_ACCOUNT }}
+          STORAGE_ACCOUNT_PATHS: ${{ secrets.MSHV_STORAGE_ACCOUNT_PATHS }}
+          MSHV_RUNNER_RG: ${{ secrets.MSHV_RUNNER_RG }}
         run: |
           set -x
 
           # Login to Azure
           az login --identity --client-id ${MI_CLIENT_ID}
 
-          # Install AzCopy if not already installed
-          if ! command -v azcopy &> /dev/null; then
-            echo "AzCopy not found, installing..."
+          if command -v azcopy >/dev/null 2>&1; then
+            azcopy --version
+          else
+            # Install AzCopy
+            echo "Installing AzCopy"
             wget -O azcopy.tar.gz https://aka.ms/downloadazcopy-v10-linux
             tar -xvf azcopy.tar.gz
             sudo mkdir -p /usr/local/bin
             sudo mv azcopy*/azcopy /usr/local/bin/
             sudo chmod +x /usr/local/bin/azcopy
-          else
-            echo "AzCopy already installed"
+
+            azcopy --version
           fi
+
+          # Determine the location as per quota available
+          vcpu=$(echo ${DOM0_SKU} | grep -i -oP '^standard_[A-Za-z]+\K[0-9]+')
+          required_vcpu=$((vcpu))
+          if [ -z $required_vcpu ]; then
+            echo "Can not get required VCPU from SKU name: ${DOM0_SKU}"
+            exit 1
+          fi
+
+          SUPPORTED_LOCATIONS=$(echo ${STORAGE_ACCOUNT_PATHS} | jq 'keys[]')
+          for value in $(echo "${SUPPORTED_LOCATIONS}" | tr ',' ' '); do
+            family=$(az vm list-skus --size ${DOM0_SKU} --location $value --resource-type "virtualMachines" --query [0].family |  sed 's/^[[:space:]"]*//;s/[[:space:]"]*$//')
+
+            query="[?name.value=='$family'].{Name:name.value,Current:currentValue,Limit:limit}"
+            quota_details=$(az vm list-usage --location $value --query $query)
+
+            current_usage=$(echo $quota_details | jq -r '.[0].Current')
+            total_quota=$(echo $quota_details | jq -r '.[0].Limit')
+            diff=$((total_quota - current_usage))
+
+            if [ $required_vcpu -ge $diff ]; then
+              LOCATION=$value
+              break
+            fi
+          done
+          if [ -z $LOCATION ]; then
+            echo "Location cannot be determined from SUPPORTED_LOCATIONS based on quota"
+            exit 1
+          fi
+
+          MSHV_DEST_STORAGE_PATH=$(echo '{STORAGE_ACCOUNT_PATHS}' | jq -r $LOCATION)
 
           # AzCopy Login
           azcopy login --identity --identity-client-id ${MI_CLIENT_ID}
           if [ $? -ne 0 ]; then
             echo "AzCopy Login Failed"
-            exit 
+            exit 1
           fi
           echo "AzCopy Login Succeeded"
 
           # Copy VHD to Azure Storage Account
           echo "Copying VHD to Azure Storage Account"
-          azcopy copy ${SOURCE_PATH_X86} ${STORAGE_ACCOUNT_PATH}/vhds/x86.vhd
+          azcopy copy ${SOURCE_PATH_X86} ${MSHV_DEST_STORAGE_PATH}/${GITHUB_RUN_ID}/x86.vhd
           if [ $? -ne 0 ]; then
             echo "AzCopy Failed: VHD upload failed"
             exit 1
@@ -107,16 +135,12 @@ jobs:
 
           # Create Blob URL for the VHD
           echo "Creating Blob URL"
-          blob_url=$(az storage blob url --auth-mode login --container-name vhds --account-name ${STORAGE_ACCOUNT} --name x86.vhd --output tsv)
-          if [ $? -ne 0 ]; then
-            echo "Blob URL creation failed"
-            exit 1
-          fi
-          echo "Created Blob URL"
+          blob_url="${MSHV_DEST_STORAGE_PATH}/${GITHUB_RUN_ID}/x86.vhd"
+          echo "Created Blob URL: ${blob_url}"
 
           # Create Image from the VHD
           echo "Creating Image"
-          az image create --resource-group ${RG} --name vhd-image --source $blob_url --os-type Linux --location ${LOCATION} --hyper-v-generation V2 || true
+          az image create --resource-group ${RG} --name "vhd-image" --source $blob_url --os-type Linux --location $LOCAATION --hyper-v-generation V2 || true
           if [ $? -ne 0 ]; then
             echo "Image creation failed"
             exit 1
@@ -125,7 +149,6 @@ jobs:
       - name: Create DOM0 VM
         env:
           DOM0_SKU: ${{ inputs.DOM0_SKU }}
-          LOCATION: westus3
           OS_DISK_SIZE: 512
           RG: ${{ inputs.RG }}
           RUNNER_RG: ${{ secrets.MSHV_RUNNER_RG }}
@@ -134,9 +157,8 @@ jobs:
           PASSWORD: ${{ secrets.MSHV_PASSWORD }}
         run: |
           set -x
-          # Extract subnet ID from the runner VM
-          NIC_ID=$(az vm list --resource-group ${RUNNER_RG} --query "[?location=='${LOCATION}' && name=='${RUNNER}'].networkProfile.networkInterfaces[0].id" -o tsv)
-          SUBNET_ID=$(az network nic show --ids $NIC_ID --query "ipConfigurations[0].subnet.id" -o tsv)
+          # Extract subnet ID
+          SUBNET_ID=$(az network vnet list --resource-group ${MSHV_RUNNER_RG} --query "[?contains(location, ${LOCATION})].{Name:name, Location:location,ID:id,SUBNETS:subnets}" | jq -r ".[0].SUBNETS[0].id")
 
           if [[ -z "$SUBNET_ID" ]]; then
             echo "Failed to get Subnet ID."
@@ -151,7 +173,7 @@ jobs:
             --name dom0_x86 \
             --subnet $SUBNET_ID \
             --size ${DOM0_SKU} \
-            --location ${LOCATION} \
+            --location $LOCATION \
             --image vhd-image \
             --os-disk-size-gb ${OS_DISK_SIZE}\
             --public-ip-sku Standard \
