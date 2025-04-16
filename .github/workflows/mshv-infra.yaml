@@ -98,7 +98,7 @@ jobs:
             total_quota=$(echo $quota_details | jq -r '.[0].Limit')
             diff=$((total_quota - current_usage))
 
-            if [ $required_vcpu -ge $diff ]; then
+            if [ $required_vcpu -le $diff ]; then
               LOCATION=$value
               break
             fi
