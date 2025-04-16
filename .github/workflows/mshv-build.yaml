@@ -68,5 +68,5 @@ jobs:
     steps:
       - name: Delete Resource Group
         run: |
-            az group delete --name MSHVBuild --yes --no-wait
+            az group delete --name MSHVBuild-${GITHUB_RUN_ID} --yes --no-wait
             echo "Resource group deleted"
