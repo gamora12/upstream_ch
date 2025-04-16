@@ -114,7 +114,7 @@ jobs:
           fi
           echo "Resource group created"
 
-          MSHV_DEST_STORAGE_PATH=$(echo '{STORAGE_ACCOUNT_PATHS}' | jq -r '.[${LOCATION}]')
+          MSHV_DEST_STORAGE_PATH=$(echo '{STORAGE_ACCOUNT_PATHS}' | jq -r --arg loc "$LOCATION" '.[$loc]')
 
           # AzCopy Login
           azcopy login --identity --identity-client-id ${MI_CLIENT_ID}
