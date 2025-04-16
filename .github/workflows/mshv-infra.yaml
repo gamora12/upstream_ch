@@ -6,8 +6,8 @@ on:
         description: 'Resource Group Name'
         required: true
         type: string
-      DOM0_SKU: 
-        description: 'Dom0 VM SKU'
+      SKU: 
+        description: 'VM SKU'
         required: true
         type: string
     secrets:
@@ -48,7 +48,7 @@ jobs:
       - name: Copy/Upload VHD to Azure Storage Account & Create RG
         id: vmInfraPrerequisite
         env:
-          DOM0_SKU: ${{ inputs.DOM0_SKU }}
+          SKU: ${{ inputs.SKU }}
           MI_CLIENT_ID: ${{ secrets.MSHV_MI_CLIENT_ID }}
           RG: ${{ inputs.RG }}
           SOURCE_PATH_X86: ${{ secrets.MSHV_X86_SOURCE_PATH }}
@@ -75,18 +75,18 @@ jobs:
           fi
 
           # Determine the location as per quota available
-          vcpu=$(echo ${DOM0_SKU} | grep -i -oP '^standard_[A-Za-z]+\K[0-9]+')
+          vcpu=$(echo ${SKU} | grep -i -oP '^standard_[A-Za-z]+\K[0-9]+')
           required_vcpu=$((vcpu))
           if [ -z $required_vcpu ]; then
-            echo "Can not get required VCPU from SKU name: ${DOM0_SKU}"
+            echo "Can not get required VCPU from SKU name: ${SKU}"
             exit 1
           fi
           
           SUPPORTED_LOCATIONS=$(echo ${STORAGE_ACCOUNT_PATHS} | jq 'keys[]' | tr -d \'\")
           for value in ${SUPPORTED_LOCATIONS}; do
-            family=$(az vm list-skus --size ${DOM0_SKU} --location $value --resource-type "virtualMachines" --query [0].family |  sed 's/^[[:space:]"]*//;s/[[:space:]"]*$//')
+            family=$(az vm list-skus --size ${SKU} --location $value --resource-type "virtualMachines" --query [0].family |  sed 's/^[[:space:]"]*//;s/[[:space:]"]*$//')
             if [ -z $family ]; then
-              echo "Can not get Family from SKU name: ${DOM0_SKU}"
+              echo "Can not get Family from SKU name: ${SKU}"
               exit 1
             fi
 
@@ -150,9 +150,9 @@ jobs:
             exit 1
           fi
 
-      - name: Create DOM0 VM
+      - name: Creating VM
         env:
-          DOM0_SKU: ${{ inputs.DOM0_SKU }}
+          SKU: ${{ inputs.SKU }}
           OS_DISK_SIZE: 512
           RG: ${{ inputs.RG }}
           RUNNER_RG: ${{ secrets.MSHV_RUNNER_RG }}
@@ -175,9 +175,9 @@ jobs:
           echo "Creating VM"
           VM_CREATION=$(az vm create \
             --resource-group ${RG} \
-            --name dom0_x86 \
+            --name vm_x86_${GITHUB_RUN_ID} \
             --subnet $SUBNET_ID \
-            --size ${DOM0_SKU} \
+            --size ${SKU} \
             --location $LOCATION \
             --image vhd-image \
             --os-disk-size-gb ${OS_DISK_SIZE}\
@@ -197,7 +197,7 @@ jobs:
 
           echo "Retrieving VM Private IP address"
           # Get Private IP Address
-          PRIVATE_IP=$(az vm show -g ${RG} -n dom0_x86 -d --query privateIps -o tsv)
+          PRIVATE_IP=$(az vm show -g ${RG} -n vm_x86_${GITHUB_RUN_ID} -d --query privateIps -o tsv)
           if [ $? -ne 0 ]; then
             echo "Failed to retrieve private IP address"
             exit 1
