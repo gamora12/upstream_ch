@@ -23,8 +23,6 @@ on:
         required: true
       MSHV_RUNNER_RG:
         required: true
-      MSHV_RUNNER:
-        required: true
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
