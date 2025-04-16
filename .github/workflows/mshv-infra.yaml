@@ -81,6 +81,8 @@ jobs:
             exit 1
           fi
 
+          echo "STORAGE_ACCOUNT_PATHS: ${STORAGE_ACCOUNT_PATHS}"
+          
           SUPPORTED_LOCATIONS=$(echo ${STORAGE_ACCOUNT_PATHS} | jq 'keys[]')
           for value in $(echo "${SUPPORTED_LOCATIONS}" | tr ',' ' '); do
             family=$(az vm list-skus --size ${DOM0_SKU} --location $value --resource-type "virtualMachines" --query [0].family |  sed 's/^[[:space:]"]*//;s/[[:space:]"]*$//')
