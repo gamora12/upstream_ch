@@ -45,7 +45,7 @@ jobs:
           fi
           az login --identity --client-id ${MI_CLIENT_ID}
 
-      - name: Copy/Upload VHD to Azure Storage Account
+      - name: Copy/Upload VHD to Azure Storage Account & Create RG
         env:
           DOM0_SKU: ${{ inputs.DOM0_SKU }}
           MI_CLIENT_ID: ${{ secrets.MSHV_MI_CLIENT_ID }}
@@ -80,8 +80,6 @@ jobs:
             echo "Can not get required VCPU from SKU name: ${DOM0_SKU}"
             exit 1
           fi
-
-          echo "STORAGE_ACCOUNT_PATHS: ${STORAGE_ACCOUNT_PATHS}"
           
           SUPPORTED_LOCATIONS=$(echo ${STORAGE_ACCOUNT_PATHS} | jq 'keys[]' | tr -d \'\")
           for value in ${SUPPORTED_LOCATIONS}; do
@@ -108,15 +106,15 @@ jobs:
             exit 1
           fi
 
-          # Create RG for MSHV VM
+          # Create RG for MSHV Infra Setup
           az group create --name ${RG} --location ${LOCATION}
           if [ $? -ne 0 ]; then
             echo "Resource group creation failed"
-            exit
+            exit 1
           fi
           echo "Resource group created"
 
-          MSHV_DEST_STORAGE_PATH=$(echo '{STORAGE_ACCOUNT_PATHS}' | jq -r '."${LOCATION}"')
+          MSHV_DEST_STORAGE_PATH=$(echo '{STORAGE_ACCOUNT_PATHS}' | jq -r '.${LOCATION}')
 
           # AzCopy Login
           azcopy login --identity --identity-client-id ${MI_CLIENT_ID}
