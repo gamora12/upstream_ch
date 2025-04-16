@@ -42,6 +42,7 @@ jobs:
           else
             curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
             az --version
+          fi
           az login --identity --client-id ${MI_CLIENT_ID}
 
       - name: Create Resource Group & Storage Account
