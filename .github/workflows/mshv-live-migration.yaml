@@ -54,5 +54,5 @@ jobs:
     steps:
       - name: Delete Resource Group
         run: |
-          az group delete --name MSHVLiveMigration --yes --no-wait
+          az group delete --name MSHVLiveMigration-${GITHUB_RUN_ID} --yes --no-wait
           echo "Resource group deleted"
