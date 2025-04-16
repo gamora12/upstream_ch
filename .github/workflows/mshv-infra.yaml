@@ -144,7 +144,7 @@ jobs:
 
           # Create Image from the VHD
           echo "Creating Image"
-          az image create --resource-group ${RG} --name "vhd-image" --source $blob_url --os-type Linux --location $LOCAATION --hyper-v-generation V2 || true
+          az image create --resource-group ${RG} --name "vhd-image" --source $blob_url --os-type Linux --location $LOCATION --hyper-v-generation V2 || true
           if [ $? -ne 0 ]; then
             echo "Image creation failed"
             exit 1
