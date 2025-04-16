@@ -45,17 +45,6 @@ jobs:
           fi
           az login --identity --client-id ${MI_CLIENT_ID}
 
-      - name: Create Resource Group & Storage Account
-        env:
-          RG: ${{ inputs.RG }}
-        run: |
-          az group create --name ${RG} --location ${LOCATION}
-          if [ $? -ne 0 ]; then
-            echo "Resource group creation failed"
-            exit
-          fi
-          echo "Resource group created"
-
       - name: Copy/Upload VHD to Azure Storage Account
         env:
           DOM0_SKU: ${{ inputs.DOM0_SKU }}
@@ -112,6 +101,14 @@ jobs:
             echo "Location cannot be determined from SUPPORTED_LOCATIONS based on quota"
             exit 1
           fi
+
+          # Create RG for MSHV VM
+          az group create --name ${RG} --location ${LOCATION}
+          if [ $? -ne 0 ]; then
+            echo "Resource group creation failed"
+            exit
+          fi
+          echo "Resource group created"
 
           MSHV_DEST_STORAGE_PATH=$(echo '{STORAGE_ACCOUNT_PATHS}' | jq -r $LOCATION)
 
