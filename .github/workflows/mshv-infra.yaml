@@ -83,9 +83,13 @@ jobs:
 
           echo "STORAGE_ACCOUNT_PATHS: ${STORAGE_ACCOUNT_PATHS}"
           
-          SUPPORTED_LOCATIONS=$(echo ${STORAGE_ACCOUNT_PATHS} | jq 'keys[]')
-          for value in $(echo "${SUPPORTED_LOCATIONS}" | tr ',' ' '); do
+          SUPPORTED_LOCATIONS=$(echo ${STORAGE_ACCOUNT_PATHS} | jq 'keys[]' | tr -d \'\")
+          for value in ${SUPPORTED_LOCATIONS}; do
             family=$(az vm list-skus --size ${DOM0_SKU} --location $value --resource-type "virtualMachines" --query [0].family |  sed 's/^[[:space:]"]*//;s/[[:space:]"]*$//')
+            if [ -z $family ]; then
+              echo "Can not get Family from SKU name: ${DOM0_SKU}"
+              exit 1
+            fi
 
             query="[?name.value=='$family'].{Name:name.value,Current:currentValue,Limit:limit}"
             quota_details=$(az vm list-usage --location $value --query $query)
