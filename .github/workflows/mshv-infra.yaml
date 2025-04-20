@@ -2,26 +2,22 @@ name: MSHV Infra Setup
 on: 
   workflow_call:
     inputs:
+      # PR_NUMBER:
+      #   description: 'PR Number to be tested'
+      #   required: true
+      #   type: number
       RG:
         description: 'Resource Group Name'
         required: true
         type: string
-      STORAGE_ACCOUNT:
-        description: 'Storage Account Name'
-        required: true
-        type: string
-      DOM0_SKU: 
-        description: 'Dom0 VM SKU'
+      SKU: 
+        description: 'VM SKU'
         required: true
         type: string
     secrets:
       MSHV_MI_CLIENT_ID:
         required: true
-      MSHV_STORAGE_ACCOUNT_PATH_W2:
-        required: true  
-      MSHV_STORAGE_ACCOUNT_PATH_W3:
-        required: true
-      MSHV_STORAGE_ACCOUNT_PATH_WE:
+      MSHV_STORAGE_ACCOUNT_PATHS:
         required: true
       MSHV_USERNAME:
         required: true
@@ -47,15 +43,23 @@ jobs:
         env:
           MI_CLIENT_ID: ${{ secrets.MSHV_MI_CLIENT_ID }}
         run: |
-          curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+          if ! command -v az &>/dev/null; then
+            curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+          else
+            echo "Azure CLI already installed"
+          fi
+          az --version
           az login --identity --client-id ${MI_CLIENT_ID}
 
-      - name: Create Resource Group & Storage Account
+      - name: Create Resource Group & extract Location
+        id: rg-setup
         env:
-          LOCATION: westus3
           RG: ${{ inputs.RG }}
+          STORAGE_ACCOUNT_PATHS: ${{ secrets.MSHV_STORAGE_ACCOUNT_PATHS }}
         run: |
-          az group create --name ${RG} --location ${LOCATION}
+          LOCATION=$(echo "$STORAGE_ACCOUNT_PATHS" | jq -r 'to_entries[0].key')
+          echo "LOCATION=$LOCATION" >> $GITHUB_OUTPUT
+          az group create --name ${RG}-${GITHUB_RUN_ID} --location ${LOCATION}
           if [ $? -ne 0 ]; then
             echo "Resource group creation failed"
             exit
@@ -64,17 +68,25 @@ jobs:
 
       - name: Copy/Upload VHD to Azure Storage Account
         env:
-          LOCATION: westus3
           MI_CLIENT_ID: ${{ secrets.MSHV_MI_CLIENT_ID }}
           RG: ${{ inputs.RG }}
           SOURCE_PATH_X86: ${{ secrets.MSHV_X86_SOURCE_PATH }}
-          STORAGE_ACCOUNT_PATH: ${{ secrets.MSHV_STORAGE_ACCOUNT_PATH_W3 }}
-          STORAGE_ACCOUNT: ${{ inputs.STORAGE_ACCOUNT }}
+          STORAGE_ACCOUNT_PATHS: ${{ secrets.MSHV_STORAGE_ACCOUNT_PATHS }}
         run: |
-          set -x
+          set -e
 
+          # Define a reusable error handling function
+          check_command() {
+            if [ $? -ne 0 ]; then
+              echo "ERROR: $1"
+              exit 1
+            fi
+          }
+
+          set -x
           # Login to Azure
           az login --identity --client-id ${MI_CLIENT_ID}
+          check_command "AZ login failed"
 
           # Install AzCopy if not already installed
           if ! command -v azcopy &> /dev/null; then
@@ -86,58 +98,49 @@ jobs:
             sudo chmod +x /usr/local/bin/azcopy
           else
             echo "AzCopy already installed"
+            azcopy --version
           fi
 
           # AzCopy Login
           azcopy login --identity --identity-client-id ${MI_CLIENT_ID}
-          if [ $? -ne 0 ]; then
-            echo "AzCopy Login Failed"
-            exit 
-          fi
-          echo "AzCopy Login Succeeded"
+          check_command "AzCopy login failed"
+
+          LOCATION=${{ steps.rg-setup.outputs.LOCATION }}
+          STORAGE_ACCOUNT_PATH=$(echo "$STORAGE_ACCOUNT_PATHS" | jq -r 'to_entries[0].value')
+          BLOB_URL="${STORAGE_ACCOUNT_PATH}/${GITHUB_RUN_ID}/x86.vhd"
 
           # Copy VHD to Azure Storage Account
           echo "Copying VHD to Azure Storage Account"
-          azcopy copy ${SOURCE_PATH_X86} ${STORAGE_ACCOUNT_PATH}/vhds/x86.vhd
-          if [ $? -ne 0 ]; then
-            echo "AzCopy Failed: VHD upload failed"
-            exit 1
-          fi
+          azcopy copy ${SOURCE_PATH_X86} ${STORAGE_ACCOUNT_PATH}/${GITHUB_RUN_ID}/x86.vhd
+          check_command "AzCopy copy failed"
           echo "AzCopy Succeeded: VHD upload complete"
-
-          # Create Blob URL for the VHD
-          echo "Creating Blob URL"
-          blob_url=$(az storage blob url --auth-mode login --container-name vhds --account-name ${STORAGE_ACCOUNT} --name x86.vhd --output tsv)
-          if [ $? -ne 0 ]; then
-            echo "Blob URL creation failed"
-            exit 1
-          fi
-          echo "Created Blob URL"
 
           # Create Image from the VHD
           echo "Creating Image"
-          az image create --resource-group ${RG} --name vhd-image --source $blob_url --os-type Linux --location ${LOCATION} --hyper-v-generation V2 || true
-          if [ $? -ne 0 ]; then
-            echo "Image creation failed"
-            exit 1
-          fi
+          az image create --resource-group ${RG}-${GITHUB_RUN_ID} --name vhd-image --source $BLOB_URL --os-type Linux --location ${LOCATION} --hyper-v-generation V2 || true
+          check_command "Image creation failed"
 
-      - name: Create DOM0 VM
+      - name: Create VM
         env:
-          DOM0_SKU: ${{ inputs.DOM0_SKU }}
-          LOCATION: westus3
           OS_DISK_SIZE: 512
           RG: ${{ inputs.RG }}
           RUNNER_RG: ${{ secrets.MSHV_RUNNER_RG }}
           RUNNER: ${{ secrets.MSHV_RUNNER }}
+          SKU: ${{ inputs.SKU }}
           USERNAME: ${{ secrets.MSHV_USERNAME }}
           PASSWORD: ${{ secrets.MSHV_PASSWORD }}
         run: |
+          check_command() {
+            if [ $? -ne 0 ]; then
+              echo "ERROR: $1"
+              exit 1
+            fi
+          }
+
           set -x
           # Extract subnet ID from the runner VM
-          NIC_ID=$(az vm list --resource-group ${RUNNER_RG} --query "[?location=='${LOCATION}' && name=='${RUNNER}'].networkProfile.networkInterfaces[0].id" -o tsv)
-          SUBNET_ID=$(az network nic show --ids $NIC_ID --query "ipConfigurations[0].subnet.id" -o tsv)
-
+          LOCATION=${{ steps.rg-setup.outputs.LOCATION }}
+          SUBNET_ID=$(az network vnet list --resource-group ${RUNNER_RG} --query "[?contains(location, '${LOCATION}')].{SUBNETS:subnets}" | jq -r ".[0].SUBNETS[0].id")
           if [[ -z "$SUBNET_ID" ]]; then
             echo "Failed to get Subnet ID."
             exit 1
@@ -145,13 +148,14 @@ jobs:
           echo "Successfully retrieved subnet ID"
 
           # Create VM
-          echo "Creating VM"
+          VM_NAME="x86_${GITHUB_RUN_ID}"
+          echo "Creating VM: $VM_NAME"
           VM_CREATION=$(az vm create \
-            --resource-group ${RG} \
-            --name dom0_x86 \
+            --resource-group ${RG}-${GITHUB_RUN_ID} \
+            --name $VM_NAME \
             --subnet $SUBNET_ID \
-            --size ${DOM0_SKU} \
-            --location ${LOCATION} \
+            --size ${SKU} \
+            --location $LOCATION \
             --image vhd-image \
             --os-disk-size-gb ${OS_DISK_SIZE}\
             --public-ip-sku Standard \
@@ -161,20 +165,14 @@ jobs:
             --admin-password ${PASSWORD} \
             --security-type Standard \
             --output json)
-          if [ $? -ne 0 ]; then
-            echo "VM Creation Failed"
-            exit 1
-          fi
+
+          check_command "VM creation failed"
           echo "VM Creation Succeeded"
-          echo $VM_CREATION
 
           echo "Retrieving VM Private IP address"
           # Get Private IP Address
-          PRIVATE_IP=$(az vm show -g ${RG} -n dom0_x86 -d --query privateIps -o tsv)
-          if [ $? -ne 0 ]; then
-            echo "Failed to retrieve private IP address"
-            exit 1
-          fi
+          PRIVATE_IP=$(az vm show -g ${RG}-${GITHUB_RUN_ID} -n $VM_NAME -d --query privateIps -o tsv)
+          check_command "Failed to retrieve private IP address"
           echo "Successfully retrieved private IP address"
 
           # SSH into the VM via sshpass
@@ -185,33 +183,49 @@ jobs:
           sleep 60
           echo "SSH is now accessible. Connecting..."
           sshpass -p ${PASSWORD} ssh -o StrictHostKeyChecking=no ${USERNAME}@$PRIVATE_IP << EOF
+            check_command() {
+              if [ $? -ne 0 ]; then
+                echo "ERROR: $1"
+                exit 1
+              fi
+            }
             set -x
             echo "Logged in"
 
             # Install Dependencies
             sudo tdnf install git moby-engine moby-cli dosfstools mtools build-essential m4 bison flex libuuid-devel qemu-img -y
+            check_command "Dependency installation failed"
+
             curl -sSf https://sh.rustup.rs | sh -s -- --default-toolchain stable --profile default -y
+            check_command "Rust installation failed"
+
             export PATH="\$HOME/.cargo/bin:$PATH"
-            cargo --version
+            cargo --version || { echo "Cargo installation failed"; exit 1; }
 
             # Clone cloud-hypervisor repo
             git clone https://github.com/cloud-hypervisor/cloud-hypervisor.git
-
-            if [ $? -ne 0 ]; then
-              echo "Clone failed for cloud-hypervisor repo"
-            fi
+            check_command "Failed to clone cloud-hypervisor repo"
             echo "Clone succeeded for cloud-hypervisor repo"
 
             sudo chown -R ${USERNAME} cloud-hypervisor
-            cd cloud-hypervisor
-            # git fetch origin --prune
+            cd cloud-hypervisor || { echo "Failed to change directory"; exit 1; }
+
+            # git fetch origin pull/$PR_NUMBER/merge
             # git checkout FETCH_HEAD
+
+            # Configure Docker
             sudo mkdir -p /etc/docker/
             echo '{"default-ulimits":{"nofile":{"Hard":65535,"Name":"nofile","Soft":65535}}}' | sudo tee /etc/docker/daemon.json
+            check_command "Docker configuration failed"
+
+            sudo systemctl stop docker
             sudo systemctl enable docker.service
             sudo systemctl enable containerd.service
             sudo systemctl start docker
+            check_command "Docker service start failed"
+
             sudo groupadd -f docker
             sudo usermod -a -G docker ${USERNAME}
             sudo systemctl restart docker
+            check_command "Failed to restart Docker service"
           EOF

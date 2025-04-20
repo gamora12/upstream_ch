@@ -6,14 +6,13 @@ jobs:
     name: MSHV Infra Setup
     uses: ./.github/workflows/mshv-infra.yaml
     with:
+      # PR_NUMBER: ${{ github.event.pull_request.number }}
       RG: "MSHVPerfMetrics"
       STORAGE_ACCOUNT: "mshvwestus3"
-      DOM0_SKU: "Standard_E8-2ds_v5"
+      SKU: "Standard_E8-2ds_v5"
     secrets:
       MSHV_MI_CLIENT_ID: ${{ secrets.MSHV_MI_CLIENT_ID }}
-      MSHV_STORAGE_ACCOUNT_PATH_W2: ${{ secrets.MSHV_STORAGE_ACCOUNT_PATH_W2 }}
-      MSHV_STORAGE_ACCOUNT_PATH_W3: ${{ secrets.MSHV_STORAGE_ACCOUNT_PATH_W3 }}
-      MSHV_STORAGE_ACCOUNT_PATH_WE: ${{ secrets.MSHV_STORAGE_ACCOUNT_PATH_WE }}
+      MSHV_STORAGE_ACCOUNT_PATHS: ${{ secrets.MSHV_STORAGE_ACCOUNT_PATHS }}
       MSHV_USERNAME: ${{ secrets.MSHV_USERNAME }}
       MSHV_PASSWORD: ${{ secrets.MSHV_PASSWORD }}
       MSHV_X86_SOURCE_PATH: ${{ secrets.MSHV_X86_SOURCE_PATH }}
@@ -26,15 +25,19 @@ jobs:
       - Linux
     needs: infrasetup
     steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
       - name: Az Login
         run: |
           az login --identity --client-id ${{ secrets.MSHV_MI_CLIENT_ID }}
+
       - name: Run performance metrics tests
         run: |
           set -x
           echo "Retrieving VM Private IP address"
           # Get Private IP Address
-          PRIVATE_IP=$(az vm show -g MSHVPerfMetrics -n dom0_x86 -d --query privateIps -o tsv)
+          PRIVATE_IP=$(az vm show -g MSHVPerfMetrics-${GITHUB_RUN_ID} -n x86_${GITHUB_RUN_ID} -d --query privateIps -o tsv)
           if [ $? -ne 0 ]; then
            echo "Failed to retrieve private IP address"
            exit 1
@@ -59,5 +62,5 @@ jobs:
     steps:
       - name: Delete Resource Group
         run: |
-          az group delete --name MSHVPerfMetrics --yes --no-wait
+          az group delete --name MSHVPerfMetrics-${GITHUB_RUN_ID} --yes --no-wait
           echo "Resource group deleted"

@@ -6,12 +6,12 @@ jobs:
     name: MSHV Infra Setup
     uses: ./.github/workflows/mshv-infra.yaml
     with:
+      # PR_NUMBER: ${{ github.event.pull_request.number }}
       RG: "MSHVLiveMigration"
-      STORAGE_ACCOUNT: "mshvwestus3"
-      DOM0_SKU: "Standard_D32ds_v4"
+      SKU: "Standard_D32ds_v4"
     secrets:
       MSHV_MI_CLIENT_ID: ${{ secrets.MSHV_MI_CLIENT_ID }}
-      MSHV_STORAGE_ACCOUNT_PATH_W2: ${{ secrets.MSHV_STORAGE_ACCOUNT_PATH_W2 }}
+      MSHV_STORAGE_ACCOUNT_PATHS: ${{ secrets.MSHV_STORAGE_ACCOUNT_PATHS }}
       MSHV_STORAGE_ACCOUNT_PATH_W3: ${{ secrets.MSHV_STORAGE_ACCOUNT_PATH_W3 }}
       MSHV_STORAGE_ACCOUNT_PATH_WE: ${{ secrets.MSHV_STORAGE_ACCOUNT_PATH_WE }}
       MSHV_USERNAME: ${{ secrets.MSHV_USERNAME }}
@@ -26,14 +26,18 @@ jobs:
       - Linux
     needs: infrasetup
     steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
       - name: Az Login
         run: az login --identity --client-id ${{ secrets.MSHV_MI_CLIENT_ID }}
+
       - name: Run live-migration tests
         run: |
           set -x
           echo "Retrieving VM Private IP address"
           # Get Private IP Address
-          PRIVATE_IP=$(az vm show -g MSHVLiveMigration -n dom0_x86 -d --query privateIps -o tsv)
+          PRIVATE_IP=$(az vm show -g MSHVLiveMigration-${{ github.run_id }} -n x86_${GITHUB_RUN_ID} -d --query privateIps -o tsv)
           if [ $? -ne 0 ]; then
            echo "Failed to retrieve private IP address"
            exit 1
@@ -58,5 +62,5 @@ jobs:
     steps:
       - name: Delete Resource Group
         run: |
-          az group delete --name MSHVLiveMigration --yes --no-wait
+          az group delete --name MSHVLiveMigration-${{ github.run_id }} --yes --no-wait
           echo "Resource group deleted"
