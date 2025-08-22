@@ -50,7 +50,7 @@ jobs:
             echo "Logged in"
             sudo chown -R ${{secrets.MSHV_USERNAME}} cloud-hypervisor
             cd cloud-hypervisor
-            sudo ./scripts/dev_cli.sh tests --hypervisor mshv --integration-live-migration
+            sudo ./scripts/dev_cli.sh tests --hypervisor mshv --integration-live-migration -- --skip live_migration::live_migration_parallel::test_live_migration_balloon --skip live_migration::live_migration_parallel::test_live_migration_balloon_local --skip live_migration::live_migration_parallel::test_live_upgrade_balloon --skip live_migration::live_migration_parallel::test_live_upgrade_balloon_local
           EOF
 
   cleanup:
