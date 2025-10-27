@@ -1,0 +1,66 @@
+name: MSHV Live-Migration Tests (x86-64)
+on: 
+  workflow_dispatch:
+jobs:
+  infrasetup:
+    name: MSHV Infra Setup
+    uses: ./.github/workflows/mshv-infra.yaml
+    with:
+      # PR_NUMBER: ${{ github.event.pull_request.number }}
+      RG: "MSHVLiveMigration"
+      SKU: "Standard_D32ds_v4"
+    secrets:
+      MSHV_MI_CLIENT_ID: ${{ secrets.MSHV_MI_CLIENT_ID }}
+      MSHV_STORAGE_ACCOUNT_PATHS: ${{ secrets.MSHV_STORAGE_ACCOUNT_PATHS }}
+      MSHV_STORAGE_ACCOUNT_PATH_W3: ${{ secrets.MSHV_STORAGE_ACCOUNT_PATH_W3 }}
+      MSHV_STORAGE_ACCOUNT_PATH_WE: ${{ secrets.MSHV_STORAGE_ACCOUNT_PATH_WE }}
+      MSHV_USERNAME: ${{ secrets.MSHV_USERNAME }}
+      MSHV_PASSWORD: ${{ secrets.MSHV_PASSWORD }}
+      MSHV_X86_SOURCE_PATH: ${{ secrets.MSHV_X86_SOURCE_PATH }}
+      MSHV_RUNNER_RG: ${{ secrets.MSHV_RUNNER_RG }}
+      MSHV_RUNNER: ${{ secrets.MSHV_RUNNER }}
+  run_tests:
+    name: Live-Migration Tests (x86-64)
+    runs-on:
+      - self-hosted
+      - Linux
+    needs: infrasetup
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Az Login
+        run: az login --identity --client-id ${{ secrets.MSHV_MI_CLIENT_ID }}
+
+      - name: Run live-migration tests
+        run: |
+          set -x
+          echo "Retrieving VM Private IP address"
+          # Get Private IP Address
+          PRIVATE_IP=$(az vm show -g MSHVLiveMigration-${{ github.run_id }} -n x86_${GITHUB_RUN_ID} -d --query privateIps -o tsv)
+          if [ $? -ne 0 ]; then
+           echo "Failed to retrieve private IP address"
+           exit 1
+          fi
+          echo "Successfully retrieved private IP address"
+          echo $PRIVATE_IP
+
+          sshpass -p "${{ secrets.MSHV_PASSWORD }}" ssh -o StrictHostKeyChecking=no "${{ secrets.MSHV_USERNAME }}"@$PRIVATE_IP << EOF
+            set -x
+            echo "Logged in"
+            sudo chown -R ${{secrets.MSHV_USERNAME}} cloud-hypervisor
+            cd cloud-hypervisor
+            sudo ./scripts/dev_cli.sh tests --hypervisor mshv --integration-live-migration -- --skip live_migration::live_migration_parallel::test_live_migration_balloon --skip live_migration::live_migration_parallel::test_live_migration_balloon_local --skip live_migration::live_migration_parallel::test_live_upgrade_balloon --skip live_migration::live_migration_parallel::test_live_upgrade_balloon_local
+          EOF
+
+  cleanup:
+    needs: run_tests
+    if: always()
+    runs-on:
+    - self-hosted
+    - Linux
+    steps:
+      - name: Delete Resource Group
+        run: |
+          az group delete --name MSHVLiveMigration-${{ github.run_id }} --yes --no-wait
+          echo "Resource group deleted"

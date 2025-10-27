@@ -1,0 +1,78 @@
+name: MSHV Build
+on: 
+  workflow_dispatch:
+jobs:
+  infrasetup:
+    uses: ./.github/workflows/mshv-infra.yaml
+    name: MSHV Infra Setup
+    with:
+      # PR_NUMBER: ${{ github.event.pull_request.number }}
+      RG: "MSHVBuild"
+      SKU: "Standard_d16s_v5"
+    secrets:
+      MSHV_MI_CLIENT_ID: ${{ secrets.MSHV_MI_CLIENT_ID }}
+      MSHV_STORAGE_ACCOUNT_PATHS: ${{ secrets.MSHV_STORAGE_ACCOUNT_PATHS }}
+      MSHV_USERNAME: ${{ secrets.MSHV_USERNAME }}
+      MSHV_PASSWORD: ${{ secrets.MSHV_PASSWORD }}
+      MSHV_X86_SOURCE_PATH: ${{ secrets.MSHV_X86_SOURCE_PATH }}
+      MSHV_RUNNER_RG: ${{ secrets.MSHV_RUNNER_RG }}
+      MSHV_RUNNER: ${{ secrets.MSHV_RUNNER }}
+  build:
+    name: Build
+    runs-on:
+      - self-hosted
+      - Linux
+    needs: infrasetup
+    strategy:
+      fail-fast: false
+      matrix:
+        RUNNER: 
+         - 'test-runner'
+        BUILD_CMD: 
+         - 'cargo build'
+         - 'cargo build --features "mshv"'
+         - 'cargo build --features "mshv,sev_snp,igvm"'
+         - 'cargo build --package vhost_user_net'
+         - 'cargo build --package vhost_user_block'
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: AZ Login
+        run: az login --identity --client-id ${{ secrets.MSHV_MI_CLIENT_ID }}
+
+      - name: Build MSHV
+        run: |
+          set -x
+          echo "Retrieving VM Private IP address"
+          PRIVATE_IP=$(az vm show -g MSHVBuild-${GITHUB_RUN_ID} -n x86_${GITHUB_RUN_ID} -d --query privateIps -o tsv)
+          if [ $? -ne 0 ]; then
+           echo "Failed to retrieve private IP address"
+           exit 1
+          fi
+          echo "Successfully retrieved private IP address"
+          echo $PRIVATE_IP
+
+          sshpass -p "${{ secrets.MSHV_PASSWORD }}" ssh -o StrictHostKeyChecking=no "${{ secrets.MSHV_USERNAME }}"@$PRIVATE_IP << EOF
+            set -x
+            echo "Logged in"
+            sudo tdnf install git moby-engine moby-cli dosfstools mtools build-essential m4 bison flex libuuid-devel qemu-img -y
+            curl -sSf https://sh.rustup.rs | sh -s -- --default-toolchain stable --profile default -y
+            export PATH="\$HOME/.cargo/bin:$PATH"
+            cd cloud-hypervisor
+            # Build Cloud-Hypervisor
+            echo "Building Cloud-Hypervisor"
+            ${{ matrix.BUILD_CMD }} --release
+          EOF
+
+  cleanup:
+    needs: build
+    if: always()
+    runs-on:
+    - self-hosted
+    - Linux
+    steps:
+      - name: Delete Resource Group
+        run: |
+            az group delete --name MSHVBuild-${GITHUB_RUN_ID} --yes --no-wait
+            echo "Resource group deleted"

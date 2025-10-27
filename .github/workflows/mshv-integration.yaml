@@ -1,0 +1,86 @@
+name: MSHV Integration Tests (x86-64)
+on: 
+  workflow_dispatch:
+jobs:
+  infrasetup:
+    name: MSHV Infra Setup
+    uses: ./.github/workflows/mshv-infra.yaml
+    with:
+      # PR_NUMBER: ${{ github.event.pull_request.number }}
+      RG: "MSHVIntegration"
+      SKU: "Standard_d16s_v5"
+    secrets:
+      MSHV_MI_CLIENT_ID: ${{ secrets.MSHV_MI_CLIENT_ID }}
+      MSHV_STORAGE_ACCOUNT_PATHS: ${{ secrets.MSHV_STORAGE_ACCOUNT_PATHS }}
+      MSHV_USERNAME: ${{ secrets.MSHV_USERNAME }}
+      MSHV_PASSWORD: ${{ secrets.MSHV_PASSWORD }}
+      MSHV_X86_SOURCE_PATH: ${{ secrets.MSHV_X86_SOURCE_PATH }}
+      MSHV_RUNNER_RG: ${{ secrets.MSHV_RUNNER_RG }}
+      MSHV_RUNNER: ${{ secrets.MSHV_RUNNER }}
+  run_tests:
+    name: Integration Tests (x86-64)
+    runs-on:
+      - self-hosted
+      - Linux
+    needs: infrasetup
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: AZ Login
+        run: az login --identity --client-id ${{ secrets.MSHV_MI_CLIENT_ID }}
+
+      - name: Run integration tests
+        run: |
+          set -x
+          echo "Retrieving VM Private IP address"
+          PRIVATE_IP=$(az vm show -g MSHVIntegration-${GITHUB_RUN_ID} -n x86_${GITHUB_RUN_ID} -d --query privateIps -o tsv)
+          if [ $? -ne 0 ]; then
+           echo "Failed to retrieve private IP address"
+           exit 1
+          fi
+          echo "Successfully retrieved private IP address"
+          echo $PRIVATE_IP
+          sshpass -p "${{ secrets.MSHV_PASSWORD }}" ssh -o StrictHostKeyChecking=no "${{ secrets.MSHV_USERNAME }}"@$PRIVATE_IP << EOF
+            set -x
+            echo "Logged in"
+            sudo chown -R ${{secrets.MSHV_USERNAME}} cloud-hypervisor
+            cd cloud-hypervisor
+
+            echo "Loading VDPA kernel modules..."
+            sudo modprobe vdpa
+            sudo modprobe vhost_vdpa
+            sudo modprobe vdpa_sim
+            sudo modprobe vdpa_sim_blk
+            sudo modprobe vdpa_sim_net
+
+            echo "Creating VDPA devices..."
+            sudo vdpa dev add name vdpa-blk0 mgmtdev vdpasim_blk
+            sudo vdpa dev add name vdpa-blk1 mgmtdev vdpasim_blk
+            sudo vdpa dev add name vdpa-blk2 mgmtdev vdpasim_net
+
+            echo "Setting permissions..."
+            for i in 0 1 2; do
+              dev="/dev/vhost-vdpa-$i"
+              if [ -e "$dev" ]; then
+                sudo chown $USER:$USER "$dev"
+                sudo chmod 660 "$dev"
+              else
+                echo "Warning: Device $dev not found"
+              fi
+            done
+
+            sudo ./scripts/dev_cli.sh tests --hypervisor mshv --integration
+          EOF
+
+  cleanup:
+    needs: run_tests
+    if: always()
+    runs-on:
+    - self-hosted
+    - Linux
+    steps:
+      - name: Delete Resource Group
+        run: |
+          az group delete --name MSHVIntegration-${GITHUB_RUN_ID} --yes --no-wait
+          echo "Resource group deleted"

@@ -1,0 +1,32 @@
+name: Concurrency Test PR
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  run-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report Concurrency Group and Start
+        run: |
+          echo "Workflow: ${{ github.workflow }}"
+          echo "PR Number: ${{ github.event.pull_request.number }}"
+          echo "Ref: ${{ github.ref }}"
+          echo "---"
+          echo "Calculated Concurrency Group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}"
+          echo "Starting long-running test simulation..."
+
+      - name: Simulate Long Running Test
+        run: |
+          # The sleep command simulates your resource-intensive CI job.
+          # We use 60 seconds to give you time to trigger a second run.
+          echo "Sleeping for 60 seconds. A new trigger will cancel this run."
+          sleep 60
+          echo "Test finished successfully."
